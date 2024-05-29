@@ -1,6 +1,10 @@
 import jax 
+import jaxopt
 import scipy
+import mpltern
 import jax.numpy as jnp
+import jax.scipy as jscipy
+import jax.random as random
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm.notebook import tqdm
@@ -32,14 +36,14 @@ def generate_gaussian_chain(num_monomers: int,
     """ 
     # Generate steps: each step is a 3D vector 
     steps = np.random.normal(mean_bond_length, std_bond_length, size=(num_monomers, 3))
-    
+
     # Compute positions by cumulative sum of steps
     positions = np.cumsum(steps, axis=0)
     
     return positions
 
 
-def visualize_polymer(polymer_chain):
+def visualize_polymer(polymer_chain, save_path=''):
     """Plot a polymer chain in 3D space
     
     Parameters
@@ -100,6 +104,8 @@ def visualize_polymer(polymer_chain):
     # cbar.set_label('Monomer number')
     
     ax.legend()
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.show()
 
     
@@ -158,7 +164,7 @@ def compare_distance_maps(chain1, chain2, type1='polymer', type2='polymer'):
 def generate_flatten_distance_map(chain):
     """ 
     """
-    return jnp.squeeze(jnp.reshape(squareform(pdist(chain)), [1, -1]))
+    return jnp.reshape(squareform(pdist(chain)), -1)
 
 
 # Plot the comparison between template chain and noisy chain
@@ -256,3 +262,106 @@ def generate_observations(polymer_chain, num_observations, gaussian_noise_std):
         observation_list.append(noisy_data)
     
     return observation_list
+
+
+@jit
+def likelihood(dmap_flat, ref_dmap_flat, measurement_error, num_probes):
+    """ 
+    """
+    return jnp.prod(jnp.array(likelihood_(dmap_flat, ref_dmap_flat, measurement_error, num_probes)))
+
+
+@jit
+def likelihood(dmap_flat, ref_dmap_flat, measurement_error, num_probes):
+    """ 
+    """
+    return jnp.prod(jnp.array(likelihood_(dmap_flat, ref_dmap_flat, measurement_error, num_probes)))
+
+
+@jit
+def loglikelihood(dmap_flat, ref_dmap_flat, measurement_error, num_probes):
+    """
+    """
+    return jnp.sum(jnp.array(loglikelihood_(dmap_flat, ref_dmap_flat, measurement_error, num_probes)))
+
+
+@jit
+def loglikelihood_(dmap_flat, ref_dmap_flat, measurement_error, num_probes):
+    """ 
+    """
+    # Calculate the difference between distance map and reference 
+    # distance map
+    subtraction_map_sq = jnp.square(dmap_flat - ref_dmap_flat)
+    sum_subtraction_map_sq = jnp.sum(subtraction_map_sq)
+    
+    # Calculate the normalization factor
+    normalization_factor = -jnp.square(num_probes) * jnp.log(jnp.sqrt(2*np.pi*jnp.square(measurement_error)))
+    
+    # Calculate the gaussian term 
+    gaussian_term = -jnp.sum(sum_subtraction_map_sq)/(2*jnp.square(measurement_error))
+    
+    # print('Scaling factor = {}'.format(normalization_factor))
+    # print('Gaussian term = {}'.format(gaussian_term))
+    
+    return normalization_factor, gaussian_term
+
+
+def prior(dmap_flat, num_probes):
+    """
+    """
+    return jnp.prod(jnp.array(prior_(dmap_flat, num_probes)))
+
+
+def prior_(dmap_flat, num_probes):
+    """
+    """
+    # Get 2D map back to simplify the expression 
+    dmap = jnp.reshape(dmap_flat, [num_probes, num_probes])
+    
+    # Calculate the squared end-to-end distance 
+    R_sq = dmap[0][-1] ** 2
+    
+    # Calculate the average bond length
+    b = jnp.mean(jnp.diag(dmap, 1))
+    
+    N = num_probes
+    
+    # Calculate the probability
+    scaling_factor = (3/(2*np.pi*N*b**2)) ** 1.5
+    gaussian_term = jnp.exp(-3*R_sq/(2*N*b**2))
+    
+    # print('Scaling factor = {}'.format(scaling_factor))
+    # print('Gaussian term = {}'.format(gaussian_term))
+    
+    return scaling_factor, gaussian_term 
+
+
+def logprior(dmap_flat, num_probes):
+    """
+    """
+    return jnp.sum(jnp.array(logprior_(dmap_flat, num_probes)))
+
+
+def logprior_(dmap_flat, num_probes):
+    """
+    """
+    # Get 2D map back to simplify the expression 
+    dmap = jnp.reshape(dmap_flat, [num_probes, num_probes])
+    
+    # Calculate the squared end-to-end distance 
+    R_sq = dmap[0][-1] ** 2
+    
+    # Calculate the average bond length
+    b = jnp.mean(jnp.diag(dmap, 1))
+    
+    N = num_probes
+    
+    # Calculate the probability
+    scaling_factor = 1.5 * jnp.log(3/(2*np.pi*N*b**2))
+    gaussian_term = -3*R_sq/(2*N*b**2)
+    
+    # print('Scaling factor = {}'.format(scaling_factor))
+    # print('Gaussian term = {}'.format(gaussian_term))
+    
+    return scaling_factor, gaussian_term 
+
