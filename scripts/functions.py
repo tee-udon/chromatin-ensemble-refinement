@@ -24,7 +24,7 @@ import jax.random as random
 import numpy as np
 import matplotlib.pyplot as plt
 from functools import partial
-from tqdm.notebook import tqdm
+from tqdm.auto import tqdm
 from scipy.optimize import minimize 
 from scipy import spatial 
 from LEBondUpdater import bondUpdater
@@ -34,6 +34,7 @@ from matplotlib import cm
 from mpl_toolkits.mplot3d import Axes3D
 from scipy.interpolate import CubicSpline
 from scipy.spatial.distance import pdist, squareform
+
 
 # add path to my polychrom installation 
 sys.path.append(r"/mnt/home/tudomlumleart/.local/lib/python3.10/site-packages/")
