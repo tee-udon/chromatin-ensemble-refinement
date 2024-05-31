@@ -16,6 +16,7 @@ import scipy
 import mpltern
 import shutil
 import multiprocessing
+import torch
 import pandas as pd 
 import extrusion1Dv2 as ex1D
 import jax.numpy as jnp
@@ -34,6 +35,8 @@ from matplotlib import cm
 from mpl_toolkits.mplot3d import Axes3D
 from scipy.interpolate import CubicSpline
 from scipy.spatial.distance import pdist, squareform
+from jaxopt import ProjectedGradient
+from jaxopt.projection import projection_simplex
 
 
 # add path to my polychrom installation 
@@ -666,3 +669,44 @@ def generate_polymer_chain(
     reporter.blocks_only = True  # Write output hdf5-files only for blocks
     time.sleep(0.2)  # wait 200ms for sanity (to let garbage collector do its magic)
     reporter.dump_data()
+
+
+def load_polymer_hdf5(polymer_directory):
+    URIs = polychrom.hdf5_format.list_URIs(polymer_directory)
+    [num_monomers, _] = polychrom.hdf5_format.load_URI(URIs[0])["pos"].shape
+    num_monomers = 100
+    num_polymers = len(URIs)
+    polys = np.full((num_monomers, 3, num_polymers), np.nan)
+    dmaps = np.full((num_monomers, num_monomers, num_polymers), np.nan)
+    for iURI, URI in enumerate(URIs):
+        data = polychrom.hdf5_format.load_URI(URI)
+        xyz = data["pos"]
+        polys[:, :, iURI] = xyz[:100, :]
+        dmaps[:, :, iURI] = squareform(pdist(xyz[:100, :]))
+    return polys, dmaps
+
+
+def visualize_dmap(dmap, vmax=None, save_path=''):
+    """Plot a distance map 
+    
+    Parameters
+    ----------
+    
+    """
+    # Create a new matplotlib figure
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    
+    # Plot using imshow
+    if vmax is None: 
+        heatmap = ax.imshow(dmap, cmap='hot', aspect='auto', vmin=0)
+    else:
+        heatmap = ax.imshow(dmap, cmap='hot', aspect='auto', vmin=0, vmax=vmax)
+        
+    cb = fig.colorbar(heatmap, ax=ax)
+    cb.set_label('Euclidean distance [a.u.]')
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.show()
+    
