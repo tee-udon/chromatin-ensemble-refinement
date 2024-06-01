@@ -710,3 +710,59 @@ def visualize_dmap(dmap, vmax=None, save_path=''):
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.show()
     
+    
+def generate_posterior_parallelize(templates, observations, template_weights, weight_renormalization=1000):
+    """
+    """
+    templates_flatten = jnp.array([generate_flatten_distance_map(t) for t in templates])
+    observations_flatten = jnp.array([generate_flatten_distance_map(o) for o in observations])
+    template_weights = jnp.array(template_weights)
+    
+    weight_prior = 1/len(template_weights) 
+    
+    # Generate grid index combination
+    template_info_indices = jnp.arange(len(templates_flatten))
+    observation_info_indices = jnp.arange(len(observations_flatten))
+    t_ind, o_ind = jnp.meshgrid(template_info_indices, observation_info_indices)
+    
+    total_posterior = 0
+    
+    t_ind = t_ind.flatten()
+    o_ind = o_ind.flatten()
+    
+    jax.debug.print("Weights at current iteration: {y}", y=template_weights)
+    def calculate_rhs(t_ind, o_ind):
+        val = 0 
+        o = observations_flatten[o_ind]
+        t = templates_flatten[t_ind]
+        alpha = template_weights[t_ind]
+        
+        val += loglikelihood(o, t, measurement_error, num_probes)
+
+        val += logprior(t, num_probes)
+
+        # This is the correct one 
+        # But the scaling between alpha and weight priors and logliokelihood are so different 
+        # val += jnp.log(alpha + 1e-32) * weight_renormalization 
+        val += jnp.log(jnp.abs(alpha) + 1e-32) * weight_renormalization  # use jnp.abs to make sure that each alpha does not go to 0
+        val += jnp.log(weight_prior) * weight_renormalization
+           
+        return val 
+    
+    def calculate_posterior(i):
+        return jscipy.special.logsumexp(jnp.where(o_ind == i, curr_obs_list, -jnp.inf))
+    
+    curr_obs_list = jnp.array(jax.vmap(calculate_rhs)(t_ind, o_ind))
+    
+    total_posterior = jnp.sum(jax.vmap(calculate_posterior)(jnp.arange(len(observations))))
+
+    return total_posterior
+
+
+def weight_neg_objective_parallelize(template_weights):
+    """
+    """
+    templates = template_chain_list
+    observations = observation_list
+    return -generate_posterior_parallelize(templates, observations, template_weights)
+    
