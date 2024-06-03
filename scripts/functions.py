@@ -3,6 +3,7 @@ import sys
 
 # add path to my polychrom installation 
 sys.path.append(r"/mnt/home/tudomlumleart/.local/lib/python3.10/site-packages/")
+sys.path.append(r"/mnt/home/tudomlumleart/00_VirtualEnvironments/jupyter-gpu/lib/python3.10/site-packages")
 
 import os 
 import h5py
@@ -17,6 +18,8 @@ import mpltern
 import shutil
 import multiprocessing
 import torch
+import umap
+import seaborn as sns
 import pandas as pd 
 import extrusion1Dv2 as ex1D
 import jax.numpy as jnp
