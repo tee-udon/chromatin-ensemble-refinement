@@ -19,6 +19,7 @@ import shutil
 import multiprocessing
 import torch
 import umap
+import time 
 import seaborn as sns
 import pandas as pd 
 import extrusion1Dv2 as ex1D
@@ -412,6 +413,7 @@ def generate_polymer_chain(
     interaction_matrix: np.ndarray = None, # make sure dim = monomer_types x monomer_types 
     ctcf_sites: list = [],
     ctcf_directions: list = None, # make sure len(dir) == len(sites)
+    ctcf_stall_probs: list = None, 
     num_lef: int = None, 
     lef_load_prob: float = None , 
     extra_bond_pairs: list = [] # make sure it is nested 
@@ -434,7 +436,10 @@ def generate_polymer_chain(
             "The dimension of interaction matrix should equal to the number of unique monomer types x the number of unique monomer types!"
     
     if ctcf_directions is None:
-        ctcf_directions = []
+        if len(ctcf_sites) == 0:
+            ctcf_directions = []
+        else:
+            ctcf_directions = np.zeros(len(ctcf_sites)).astype(int)
     assert len(ctcf_directions) == len(ctcf_sites), "The number of CTCF directions should equal to the number of CTCF sites!"
     
     
@@ -452,18 +457,26 @@ def generate_polymer_chain(
     ctcfSites = ctcf_sites
     nCTCF = np.shape(ctcfSites)[0]
     ctcfDir = ctcf_directions  # 0 is bidirectional, 1 is right 2 is left
-    ctcfCapture = 0.99 * np.ones(nCTCF)  # capture probability per block if capture < than this, capture
-    ctcfRelease = 0.01 * np.ones(nCTCF)  # release probability per block. if capture < than this, release
+    if ctcf_stall_probs is None:
+        ctcfCapture = 0.99 * np.ones(nCTCF)  # capture probability per block if capture < than this, capture
+        ctcfRelease = 0.01 * np.ones(nCTCF)  # release probability per block. if capture < than this, release
+    else:
+        ctcf_stall_probs = np.array(ctcf_stall_probs)
+        ctcfCapture = ctcf_stall_probs
+        ctcfRelease = 1 - ctcf_stall_probs
+    assert len(ctcfCapture) == nCTCF, 'the length of ctcfCapture should equal to nCTCF!'
+    assert len(ctcfRelease) == nCTCF, 'the length of ctcfRelease should equal to nCTCF!'
+    
     oneChainMonomerTypes = monomer_types
     interactionMatrix = interaction_matrix
     loadProb = lef_load_prob
     print(loadProb)
     
     if num_lef is None:
-        if not ctcf_sites:
+        if len(ctcf_sites) == 0:
             num_lef == 0
         else:
-            num_lef = num_monomers / SEPARATION
+            num_lef = num_monomers // SEPARATION
             
     LEFNum = num_lef
     monomers = N1
@@ -518,7 +531,9 @@ def generate_polymer_chain(
     # should modify this to allow directionality
     for i in range(M):  # loop over chains (this variable needs a better name Max)
         for t in range(len(ctcfSites)):
+            print(ctcfSites)
             pos = i * N1 + ctcfSites[t]
+            
             if ctcfDir[t] == 0:
                 ctcfLeftCapture[pos] = ctcfCapture[t]  # if random [0,1] is less than this, capture
                 ctcfLeftRelease[pos] = ctcfRelease[t]  # if random [0,1] is less than this, release
@@ -672,21 +687,6 @@ def generate_polymer_chain(
     reporter.blocks_only = True  # Write output hdf5-files only for blocks
     time.sleep(0.2)  # wait 200ms for sanity (to let garbage collector do its magic)
     reporter.dump_data()
-
-
-def load_polymer_hdf5(polymer_directory):
-    URIs = polychrom.hdf5_format.list_URIs(polymer_directory)
-    [num_monomers, _] = polychrom.hdf5_format.load_URI(URIs[0])["pos"].shape
-    num_monomers = 100
-    num_polymers = len(URIs)
-    polys = np.full((num_monomers, 3, num_polymers), np.nan)
-    dmaps = np.full((num_monomers, num_monomers, num_polymers), np.nan)
-    for iURI, URI in enumerate(URIs):
-        data = polychrom.hdf5_format.load_URI(URI)
-        xyz = data["pos"]
-        polys[:, :, iURI] = xyz[:100, :]
-        dmaps[:, :, iURI] = squareform(pdist(xyz[:100, :]))
-    return polys, dmaps
 
 
 def visualize_dmap(dmap, vmax=None, save_path=''):
