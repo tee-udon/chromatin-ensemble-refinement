@@ -21,7 +21,7 @@ class bondUpdater(object):
         self.inactiveParamDict = inactiveParamDict
 
 
-    def setup(self, bondForce,  blocks=100, smcStepsPerBlock=1):
+    def setup(self, bondForce, blocks=100, smcStepsPerBlock=1):
         """
         A method that milks smcTranslocator object
         and creates a set of unique bonds, etc.
