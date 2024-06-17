@@ -40,8 +40,7 @@ from mpl_toolkits.mplot3d import Axes3D
 from scipy.interpolate import CubicSpline
 from scipy.spatial.distance import pdist, squareform
 from jaxopt import ProjectedGradient
-from jaxopt.projection import projection_simplex
-
+from jaxopt.projection import projection_simplex, projection_non_negative
 
 # add path to my polychrom installation 
 sys.path.append(r"/mnt/home/tudomlumleart/.local/lib/python3.10/site-packages/")
@@ -175,21 +174,16 @@ def compare_distance_maps(chain1, chain2, type1='polymer', type2='polymer'):
     else:
         distance_map2 = chain2
     
-    # Determine the scale of colorbars
-    # Both colorbars show data in the same range 
-    cm_min = 0
-    cm_max = np.max([np.max(distance_map1), np.max(distance_map2)])
-    
     # Initialize new figure
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
     
     # Plot distance maps 
-    heatmap1 = ax1.imshow(distance_map1, cmap='hot', aspect='auto', vmin=cm_min, vmax=cm_max)
+    heatmap1 = ax1.imshow(distance_map1, cmap='hot', aspect='auto')
     ax1.set_title('Chain 1')
     cb1 = fig.colorbar(heatmap1, ax=ax1)
     cb1.set_label('Euclidean distance [a.u.]')
     
-    heatmap2 = ax2.imshow(distance_map2, cmap='hot', aspect='auto', vmin=cm_min, vmax=cm_max)
+    heatmap2 = ax2.imshow(distance_map2, cmap='hot', aspect='auto')
     ax2.set_title('Chain 2')
     cb2 = fig.colorbar(heatmap2, ax=ax2)
     cb2.set_label('Euclidean distance [a.u.]')
@@ -302,28 +296,28 @@ def generate_observations(polymer_chain, num_observations, gaussian_noise_std):
     return observation_list
 
 
-@jit
+@jax.jit
 def likelihood(dmap_flat, ref_dmap_flat, measurement_error, num_probes):
     """ 
     """
     return jnp.prod(jnp.array(likelihood_(dmap_flat, ref_dmap_flat, measurement_error, num_probes)))
 
 
-@jit
+@jax.jit
 def likelihood(dmap_flat, ref_dmap_flat, measurement_error, num_probes):
     """ 
     """
     return jnp.prod(jnp.array(likelihood_(dmap_flat, ref_dmap_flat, measurement_error, num_probes)))
 
 
-@jit
+@jax.jit
 def loglikelihood(dmap_flat, ref_dmap_flat, measurement_error, num_probes):
     """
     """
     return jnp.sum(jnp.array(loglikelihood_(dmap_flat, ref_dmap_flat, measurement_error, num_probes)))
 
 
-@jit
+@jax.jit
 def loglikelihood_(dmap_flat, ref_dmap_flat, measurement_error, num_probes):
     """ 
     """
@@ -343,13 +337,13 @@ def loglikelihood_(dmap_flat, ref_dmap_flat, measurement_error, num_probes):
     
     return normalization_factor, gaussian_term
 
-
+@partial(jax.jit, static_argnums=1)
 def prior(dmap_flat, num_probes):
     """
     """
     return jnp.prod(jnp.array(prior_(dmap_flat, num_probes)))
 
-
+@partial(jax.jit, static_argnums=1)
 def prior_(dmap_flat, num_probes):
     """
     """
@@ -373,13 +367,13 @@ def prior_(dmap_flat, num_probes):
     
     return scaling_factor, gaussian_term 
 
-
+@partial(jax.jit, static_argnums=1)
 def logprior(dmap_flat, num_probes):
     """
     """
     return jnp.sum(jnp.array(logprior_(dmap_flat, num_probes)))
 
-
+@partial(jax.jit, static_argnums=1)
 def logprior_(dmap_flat, num_probes):
     """
     """
@@ -416,7 +410,8 @@ def generate_polymer_chain(
     ctcf_stall_probs: list = None, 
     num_lef: int = None, 
     lef_load_prob: float = None , 
-    extra_bond_pairs: list = [] # make sure it is nested 
+    extra_bond_pairs: list = [], # make sure it is nested 
+    num_templates: int = 100
     ): 
     """ 
     Add documentation here
@@ -474,7 +469,7 @@ def generate_polymer_chain(
     
     if num_lef is None:
         if len(ctcf_sites) == 0:
-            num_lef == 0
+            num_lef = 0
         else:
             num_lef = num_monomers // SEPARATION
             
@@ -493,7 +488,7 @@ def generate_polymer_chain(
     saveEveryBlocks = 100  # save every 10 blocks
     numObservations = num_observations
     restartSimulationEveryBlocks = numObservations * saveEveryBlocks # blocks per iteration
-    trajectoryLength = restartSimulationEveryBlocks  # 100000 # time duration of simulation (down from 100,000)
+    trajectoryLength = 100  # Let the 1D simulation runs for 100 timesteps
     
     # check that these loaded alright
     print(f'LEF count: {LEFNum}')
@@ -502,192 +497,214 @@ def generate_polymer_chain(
     print('monomer types:')
     print(oneChainMonomerTypes)
     print(save_folder)
-    
-    newFolder = save_folder
-    lefPosFile = save_folder + "LEFPos.h5"
-    # remove previous LEFPos.h5 file
-    if os.path.isfile(lefPosFile):
-        os.remove(lefPosFile)
-        
-    # generate a new folder  
-    if not os.path.isdir(newFolder):
-        os.makedirs(newFolder)
-    else:
-        shutil.rmtree(newFolder)
-        os.makedirs(newFolder)
-        
-    reporter = HDF5Reporter(folder=newFolder, max_data_length=100, check_exists=False)
-    print('creating folder')
-    
-    # ==================================#
-    # Run and load 1D simulation
-    # =================================#
-    
-    ctcfLeftRelease = {}
-    ctcfRightRelease = {}
-    ctcfLeftCapture = {}
-    ctcfRightCapture = {}
-    
-    # should modify this to allow directionality
-    for i in range(M):  # loop over chains (this variable needs a better name Max)
-        for t in range(len(ctcfSites)):
-            print(ctcfSites)
-            pos = i * N1 + ctcfSites[t]
-            
-            if ctcfDir[t] == 0:
-                ctcfLeftCapture[pos] = ctcfCapture[t]  # if random [0,1] is less than this, capture
-                ctcfLeftRelease[pos] = ctcfRelease[t]  # if random [0,1] is less than this, release
-                ctcfRightCapture[pos] = ctcfCapture[t]
-                ctcfRightRelease[pos] = ctcfRelease[t]
-            elif ctcfDir[t] == 1:  # stop Cohesin moving toward the right
-                ctcfLeftCapture[pos] = 0
-                ctcfLeftRelease[pos] = 1
-                ctcfRightCapture[pos] = ctcfCapture[t]
-                ctcfRightRelease[pos] = ctcfRelease[t]
-            elif ctcfDir[t] == 2:
-                ctcfLeftCapture[pos] = ctcfCapture[t]  # if random [0,1] is less than this, capture
-                ctcfLeftRelease[pos] = ctcfRelease[t]  # if random [0,1] is less than this, release
-                ctcfRightCapture[pos] = 0
-                ctcfRightRelease[pos] = 1
-        
-    args = {}
-    args["ctcfRelease"] = {-1: ctcfLeftRelease, 1: ctcfRightRelease}
-    args["ctcfCapture"] = {-1: ctcfLeftCapture, 1: ctcfRightCapture}
-    args["N"] = N
-    args["LIFETIME"] = LIFETIME
-    args["LIFETIME_STALLED"] = LIFETIME  # no change in lifetime when stalled
-    
-    occupied = np.zeros(N)
-    occupied[0] = 1  # (I think this is just prevent the cohesin loading at the end by making it already occupied)
-    occupied[-1] = 1  # [-1] is "python" for end
-    cohesins = []
-    
-    print('starting simulation with N LEFs=')
-    print(LEFNum)
-    for i in range(LEFNum):
-        ex1D.loadOneFromDist(cohesins, occupied, args, loadProb)  # load the cohesins
-    
-    with h5py.File(lefPosFile, mode='a') as myfile:
-        dset = myfile.create_dataset("positions",
-                                        shape=(trajectoryLength, LEFNum, 2),
-                                        dtype=np.int32,
-                                        compression="gzip")
-        steps = 100  # saving in 50 chunks because the whole trajectory may be large
-        bins = np.linspace(0, trajectoryLength, steps, dtype=int)  # chunks boundaries
-        for st, end in zip(bins[:-1], bins[1:]):
-            cur = []
-            for i in range(st, end):
-                ex1D.translocate(cohesins, occupied, args, loadProb)  # actual step of LEF dynamics
-                positions = [(cohesin.left.pos, cohesin.right.pos) for cohesin in cohesins]
-                cur.append(positions)  # appending current positions to an array
-            cur = np.array(cur)  # when we finished a block of positions, save it to HDF5
-            dset[st:end] = cur
-        myfile.attrs["N"] = N
-        myfile.attrs["LEFNum"] = LEFNum
-    
-    # =========== Load LEF simulation ===========#
-    trajectory_file = h5py.File(lefPosFile, mode='r')
-    LEFNum = trajectory_file.attrs["LEFNum"]  # number of LEFs
-    LEFpositions = trajectory_file["positions"]  # array of LEF positions
-    steps = MDstepsPerCohesinStep  # MD steps per step of cohesin  (set to ~800 in real sims)
-    Nframes = LEFpositions.shape[0]  # length of the saved trajectory (>25000 in real sims)
-    print(f'Length of the saved trajectory: {Nframes}')
-    block = 0  # starting block
-    
-    # test some properties
-    # assertions for easy managing code below
-    assert (Nframes % restartSimulationEveryBlocks) == 0
-    assert (restartSimulationEveryBlocks % saveEveryBlocks) == 0
-    
-    savesPerSim = restartSimulationEveryBlocks // saveEveryBlocks
-    simInitsTotal = (Nframes) // restartSimulationEveryBlocks
-    # concatinate monomers if needed
-    if len(oneChainMonomerTypes) != N:
-        monomerTypes = np.tile(oneChainMonomerTypes, num_chains)
-    else:
-        monomerTypes = oneChainMonomerTypes
-    
-    N_chain = len(oneChainMonomerTypes)
-    N = len(monomerTypes)
-    print(f'N_chain: {N_chain}')  # ~8000 in a real sim
-    print(f'N: {N}')  # ~40000 in a real sim
-    N_traj = trajectory_file.attrs["N"]
-    print(f'N_traj: {N_traj}')
-    assert N == trajectory_file.attrs["N"]
-    print(f'Nframes: {Nframes}')
-    print(f'simInitsTotal: {simInitsTotal}')
-    
-    # ==============================================================#
-    #                  RUN 3D simulation                              #
-    # ==============================================================#
-    # Initial simulation using fixed input states
-    t = 0
-    LEFsubset = LEFpositions[t * restartSimulationEveryBlocks:(t + 1) * restartSimulationEveryBlocks, :,
-                :]  # a subset of the total LEF simulation time
-    milker = bondUpdater(LEFsubset)
-    data = grow_cubic(N, int((N / (density * 1.2)) ** 0.333), method="linear")  # starting conformation
-    PBC_width = (N / density) ** 0.333
-    chains = [(N_chain * (k), N_chain * (k + 1), False) for k in range(num_chains)]  # now i
-    reporter = HDF5Reporter(folder=newFolder, max_data_length=100)
-    a = Simulation(N=N,
-                    error_tol=0.01,
-                    collision_rate=0.02,
-                    integrator="variableLangevin",
-                    platform="CUDA",
-                    GPU="0",
-                    PBCbox=False, # turn off bounding box
-                    reporters=[reporter],
-                    precision="mixed")  # platform="CPU", # GPU="1"
-    
-    a.set_data(data)  # initial polymer
-    a.add_force(
-        polychrom.forcekits.polymer_chains(
-            a,
-            chains=chains,
-            nonbonded_force_func=polychrom.forces.heteropolymer_SSW,
-            nonbonded_force_kwargs={
-                'attractionEnergy': 0,  # base attraction energy for all monomers
-                'attractionRadius': attraction_radius,
-                'interactionMatrix': interactionMatrix,
-                'monomerTypes': monomerTypes,
-                'extraHardParticlesIdxs': []
-            },
-            bond_force_kwargs={
-                'bondLength': 1,
-                'bondWiggleDistance': 0.05
-            },
-            angle_force_kwargs={
-                'k': angle_force
-            },
-            extra_bonds = extra_bond_pairs
-        )
-    )
-    # ------------ initializing milker; adding bonds ---------
-    kbond = a.kbondScalingFactor / (smcBondWiggleDist ** 2)
-    bondDist = smcBondDist * a.length_scale
-    activeParams = {"length": bondDist, "k": kbond}
-    inactiveParams = {"length": bondDist, "k": 0}
-    milker.setParams(activeParams, inactiveParams)
-    milker.setup(bondForce=a.force_dict['harmonic_bonds'],
-                    blocks=restartSimulationEveryBlocks)
-    
-    # If your simulation does not start, consider using energy minimization below
-    a.local_energy_minimization()  # only do this at the beginning
-    
-    # this runs
-    for i in range(restartSimulationEveryBlocks):  # loops over 100
-        if i % saveEveryBlocks == (saveEveryBlocks - 1):
-            a.do_block(steps=steps)
-        else:
-            a.integrator.step(steps)  # do steps without getting the positions from the GPU (faster)
-        if i < restartSimulationEveryBlocks - 1:
-            curBonds, pastBonds = milker.step(a.context)  # this updates bonds. You can do something with bonds here
-    data = a.get_data()  # save data and step, and delete the simulation
-    del a
-    reporter.blocks_only = True  # Write output hdf5-files only for blocks
-    time.sleep(0.2)  # wait 200ms for sanity (to let garbage collector do its magic)
-    reporter.dump_data()
 
+    # generate a new folder  
+    if not os.path.isdir(save_folder):
+        os.makedirs(save_folder)
+    else:
+        shutil.rmtree(save_folder)
+        os.makedirs(save_folder)
+
+    for i_template in tqdm(range(num_templates)):
+        simulation_save_folder = save_folder + 'template_{}/'.format(i_template)
+        
+        if not os.path.isdir(simulation_save_folder):
+            os.makedirs(simulation_save_folder)
+        else:
+            shutil.rmtree(simulation_save_folder)
+            os.makedirs(simulation_save_folder)
+        
+        newFolder = simulation_save_folder
+        lefPosFile = simulation_save_folder + "LEFPos.h5"
+        print(lefPosFile)
+        # remove previous LEFPos.h5 file
+        if os.path.isfile(lefPosFile):
+            os.remove(lefPosFile)
+            
+        # generate a new folder  
+        if not os.path.isdir(newFolder):
+            os.makedirs(newFolder)
+        else:
+            shutil.rmtree(newFolder)
+            os.makedirs(newFolder)
+            
+        reporter = HDF5Reporter(folder=newFolder, max_data_length=100, check_exists=False)
+        print('creating folder')
+        
+        # ==================================#
+        # Run and load 1D simulation
+        # =================================#
+        
+        ctcfLeftRelease = {}
+        ctcfRightRelease = {}
+        ctcfLeftCapture = {}
+        ctcfRightCapture = {}
+        
+        # should modify this to allow directionality
+        for i in range(M):  # loop over chains (this variable needs a better name Max)
+            for t in range(len(ctcfSites)):
+                print(ctcfSites)
+                pos = i * N1 + ctcfSites[t]
+                
+                if ctcfDir[t] == 0:
+                    ctcfLeftCapture[pos] = ctcfCapture[t]  # if random [0,1] is less than this, capture
+                    ctcfLeftRelease[pos] = ctcfRelease[t]  # if random [0,1] is less than this, release
+                    ctcfRightCapture[pos] = ctcfCapture[t]
+                    ctcfRightRelease[pos] = ctcfRelease[t]
+                elif ctcfDir[t] == 1:  # stop Cohesin moving toward the right
+                    ctcfLeftCapture[pos] = 0
+                    ctcfLeftRelease[pos] = 1
+                    ctcfRightCapture[pos] = ctcfCapture[t]
+                    ctcfRightRelease[pos] = ctcfRelease[t]
+                elif ctcfDir[t] == 2:
+                    ctcfLeftCapture[pos] = ctcfCapture[t]  # if random [0,1] is less than this, capture
+                    ctcfLeftRelease[pos] = ctcfRelease[t]  # if random [0,1] is less than this, release
+                    ctcfRightCapture[pos] = 0
+                    ctcfRightRelease[pos] = 1
+            
+        args = {}
+        args["ctcfRelease"] = {-1: ctcfLeftRelease, 1: ctcfRightRelease}
+        args["ctcfCapture"] = {-1: ctcfLeftCapture, 1: ctcfRightCapture}
+        args["N"] = N
+        args["LIFETIME"] = LIFETIME
+        args["LIFETIME_STALLED"] = LIFETIME  # no change in lifetime when stalled
+        
+        occupied = np.zeros(N)
+        occupied[0] = 1  # (I think this is just prevent the cohesin loading at the end by making it already occupied)
+        occupied[-1] = 1  # [-1] is "python" for end
+        cohesins = []
+        
+        print('starting simulation with N LEFs=')
+        print(LEFNum)
+        for i in range(LEFNum):
+            ex1D.loadOneFromDist(cohesins, occupied, args, loadProb)  # load the cohesins
+        
+        with h5py.File(lefPosFile, mode='a') as myfile:
+            dset = myfile.create_dataset("positions",
+                                            shape=(trajectoryLength, LEFNum, 2),
+                                            dtype=np.int32,
+                                            compression="gzip")
+            steps = 100  # saving in 50 chunks because the whole trajectory may be large
+            bins = np.linspace(0, trajectoryLength, steps, dtype=int)  # chunks boundaries
+            for st, end in zip(bins[:-1], bins[1:]):
+                cur = []
+                for i in range(st, end):
+                    ex1D.translocate(cohesins, occupied, args, loadProb)  # actual step of LEF dynamics
+                    positions = [(cohesin.left.pos, cohesin.right.pos) for cohesin in cohesins]
+                    cur.append(positions)  # appending current positions to an array
+                cur = np.array(cur)  # when we finished a block of positions, save it to HDF5
+                dset[st:end] = cur
+            myfile.attrs["N"] = N
+            myfile.attrs["LEFNum"] = LEFNum
+        
+        # =========== Load LEF simulation ===========#
+        trajectory_file = h5py.File(lefPosFile, mode='r')
+        LEFNum = trajectory_file.attrs["LEFNum"]  # number of LEFs
+        LEFpositions = trajectory_file["positions"]  # array of LEF positions
+        steps = MDstepsPerCohesinStep  # MD steps per step of cohesin  (set to ~800 in real sims)
+        Nframes = LEFpositions.shape[0]  # length of the saved trajectory (>25000 in real sims)
+        print(f'Length of the saved trajectory: {Nframes}')
+        block = 0  # starting block
+        
+        # test some properties
+        # assertions for easy managing code below
+        # assert (Nframes % restartSimulationEveryBlocks) == 0
+        assert (restartSimulationEveryBlocks % saveEveryBlocks) == 0
+        
+        savesPerSim = restartSimulationEveryBlocks // saveEveryBlocks
+        simInitsTotal = (Nframes) // restartSimulationEveryBlocks
+        # concatinate monomers if needed
+        if len(oneChainMonomerTypes) != N:
+            monomerTypes = np.tile(oneChainMonomerTypes, num_chains)
+        else:
+            monomerTypes = oneChainMonomerTypes
+        
+        N_chain = len(oneChainMonomerTypes)
+        N = len(monomerTypes)
+        print(f'N_chain: {N_chain}')  # ~8000 in a real sim
+        print(f'N: {N}')  # ~40000 in a real sim
+        N_traj = trajectory_file.attrs["N"]
+        print(f'N_traj: {N_traj}')
+        assert N == trajectory_file.attrs["N"]
+        print(f'Nframes: {Nframes}')
+        print(f'simInitsTotal: {simInitsTotal}')
+        
+        # ==============================================================#
+        #                  RUN 3D simulation                              #
+        # ==============================================================#
+        # Initial simulation using fixed input states
+        num_timepoint, num_lefs, _ = LEFpositions.shape
+            
+        # generate a new folder  
+        if not os.path.isdir(simulation_save_folder):
+            os.makedirs(simulation_save_folder)
+        else:
+            shutil.rmtree(simulation_save_folder)
+            os.makedirs(simulation_save_folder)
+
+        LEFsubset = LEFpositions[num_timepoint-1:num_timepoint, :, :]  # a subset of the total LEF simulation time
+        milker = bondUpdater(LEFsubset)
+        data = grow_cubic(N, int((N / (density * 1.2)) ** 0.333), method="linear")  # starting conformation
+        PBC_width = (N / density) ** 0.333
+        chains = [(N_chain * (k), N_chain * (k + 1), False) for k in range(num_chains)]  # now i
+        reporter = HDF5Reporter(folder=simulation_save_folder, max_data_length=100)
+        a = Simulation(N=N,
+                        error_tol=0.01,
+                        collision_rate=0.02,
+                        integrator="variableLangevin",
+                        platform="CUDA",
+                        GPU="0",
+                        PBCbox=False, # turn off bounding box
+                        reporters=[reporter],
+                        precision="mixed")  # platform="CPU", # GPU="1"
+        
+        a.set_data(data)  # initial polymer
+        a.add_force(
+            polychrom.forcekits.polymer_chains(
+                a,
+                chains=chains,
+                nonbonded_force_func=polychrom.forces.heteropolymer_SSW,
+                nonbonded_force_kwargs={
+                    'attractionEnergy': 0,  # base attraction energy for all monomers
+                    'attractionRadius': attraction_radius,
+                    'interactionMatrix': interactionMatrix,
+                    'monomerTypes': monomerTypes,
+                    'extraHardParticlesIdxs': []
+                },
+                bond_force_kwargs={
+                    'bondLength': 1,
+                    'bondWiggleDistance': 0.05
+                },
+                angle_force_kwargs={
+                    'k': angle_force
+                },
+                extra_bonds = extra_bond_pairs
+            )
+        )
+        # ------------ initializing milker; adding bonds ---------
+        kbond = a.kbondScalingFactor / (smcBondWiggleDist ** 2)
+        bondDist = smcBondDist * a.length_scale
+        activeParams = {"length": bondDist, "k": kbond}
+        inactiveParams = {"length": bondDist, "k": 0}
+        milker.setParams(activeParams, inactiveParams)
+        milker.setup(bondForce=a.force_dict['harmonic_bonds'],
+                        blocks=1)
+        
+        # If your simulation does not start, consider using energy minimization below
+        a.local_energy_minimization()  # only do this at the beginning
+        
+        # this runs
+        for i in range(restartSimulationEveryBlocks):  # loops over 100
+            if i % saveEveryBlocks == (saveEveryBlocks - 1):
+                a.do_block(steps=steps)
+            else:
+                a.integrator.step(steps)  # do steps without getting the positions from the GPU (faster)
+                
+        data = a.get_data()  # save data and step, and delete the simulation
+        del a
+        reporter.blocks_only = True  # Write output hdf5-files only for blocks
+        time.sleep(0.2)  # wait 200ms for sanity (to let garbage collector do its magic)
+        reporter.dump_data()
 
 def visualize_dmap(dmap, vmax=None, save_path=''):
     """Plot a distance map 
@@ -756,7 +773,6 @@ def generate_posterior_parallelize(templates, observations, template_weights, we
         return jscipy.special.logsumexp(jnp.where(o_ind == i, curr_obs_list, -jnp.inf))
     
     curr_obs_list = jnp.array(jax.vmap(calculate_rhs)(t_ind, o_ind))
-    
     total_posterior = jnp.sum(jax.vmap(calculate_posterior)(jnp.arange(len(observations))))
 
     return total_posterior
