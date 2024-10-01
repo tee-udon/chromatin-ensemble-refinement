@@ -24,7 +24,7 @@ def run_mcmc(save_dir):
     esc_maps_interp_flat = np.array([x.flatten() for x in esc_maps_interp])
     cnc_maps_interp_flat = np.array([x.flatten() for x in cnc_maps_interp])
     all_maps_interp = np.concatenate((esc_maps_interp, cnc_maps_interp), axis=0)
-    all_maps_interp_flat = np.concatenate((esc_maps_interp_flat, cnc_maps_interp_flat), axis=0)
+    
     
     pca = PCA(n_components=2)
     pca.fit(all_maps_interp_flat)

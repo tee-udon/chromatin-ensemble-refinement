@@ -774,6 +774,64 @@ def calculate_conformational_variance(dmap_list, dmap_ref):
     return var
 
 
+def calculate_distance_map(polys):
+    # Extract the dimensions of the input array
+    num_probes, num_coords, num_cells = polys.shape
+    
+    # Initialize an array of the same shape to hold the interpolated values
+    new_maps = np.zeros((num_cells, num_probes, num_probes))
+    
+    # Iterate over each cell
+    for c in range(num_cells):
+        # Extract the data for the current cell
+        curr_cells = polys[:, :, c]
+        
+        # Skip cells with all missing values
+        if np.all(np.isnan(curr_cells)):
+            continue  # This leaves a matrix of zeros in the output array
+        
+        # Calculate the pairwise Euclidean distance between each pair of probes
+        dmap = squareform(pdist(curr_cells))
+        
+        # Assign the distance map to the corresponding position in the output array
+        new_maps[c, :, :] = dmap
+    
+    # Return the array with interpolated values
+    return new_maps
+
+
+def calculate_conformational_variance_new(dmap_list, microstates_dmap):
+    # This is incorrect because it finds mean across all samples 
+    """
+    Calculate the conformational variation of a set of distance maps relative to a reference map.
+
+    Parameters:
+    dmap_list (list): A list of 2D numpy arrays representing the distance maps.
+    dmap_ref (np.ndarray): A 2D numpy array representing the reference distance map.
+    num_probes (int): The number of probes in the distance maps.
+
+    Returns:
+    np.ndarray: A 2D numpy array containing the variance of the squared Euclidean distances 
+               between each distance map and the reference map.
+    """
+    # Convert dmap_list to a NumPy array
+    dmap_list = np.array(dmap_list)
+    
+    num_microstates = microstates_dmap.shape[0]
+    num_probes = np.round(microstates_dmap.shape[1] ** 0.5).astype(int)
+    
+    dmap_list = dmap_list[:, np.newaxis, :]
+    microstates_dmap = microstates_dmap[np.newaxis, :, :]
+    
+    # Calculate the squared Euclidean distance between each distance map and the reference map
+    diff_list = np.sqrt((dmap_list - microstates_dmap) ** 2)
+    
+    # Calculate the variance along the number of observation/cell dimension
+    var = np.var(diff_list, axis=0)
+    
+    return np.reshape(var, (num_microstates, num_probes, num_probes))
+
+
 def load_weights(directory, num_metastructures):
     log_weights = []
     lp = []
