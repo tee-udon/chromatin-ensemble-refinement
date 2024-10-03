@@ -34,6 +34,7 @@ from tqdm.auto import tqdm
 from scipy import spatial 
 from matplotlib import cm 
 from scipy.spatial.distance import pdist, cdist, squareform
+from scipy.interpolate import CubicSpline
 from cmdstanpy import CmdStanModel
 from sklearn.decomposition import PCA
 
