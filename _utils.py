@@ -1,8 +1,8 @@
 import sys
 
+# sys.path.append(r"/mnt/home/tudomlumleart/.local/lib/python3.10/site-packages/")
+# sys.path.append(r"/mnt/home/tudomlumleart/ceph/00_VirtualEnvironments/jupyter-gpu/lib/python3.10/site-packages")
 sys.path.append(r"/mnt/ceph/users/tudomlumleart/00_VirtualEnvironments/teeu/lib/python3.10/site-packages")
-sys.path.append(r"/mnt/home/tudomlumleart/.local/lib/python3.10/site-packages/")
-sys.path.append(r"/mnt/home/tudomlumleart/ceph/00_VirtualEnvironments/jupyter-gpu/lib/python3.10/site-packages")
 
 import os 
 import h5py
@@ -21,6 +21,7 @@ import numpy
 import pickle
 import itertools
 import jax
+import tensorflow as tf
 import jax.numpy as jnp
 import seaborn as sns
 import pandas as pd 
@@ -833,6 +834,119 @@ def calculate_conformational_variance_new(dmap_list, microstates_dmap):
     return np.reshape(var, (num_microstates, num_probes, num_probes))
 
 
+def calculate_conformational_variance_jax(dmap_list, dmap_ref):
+    """
+    Calculate the conformational variation of a set of distance maps relative to a reference map.
+
+    Parameters:
+    dmap_list (list): A list of 2D numpy arrays representing the distance maps.
+    dmap_ref (np.ndarray): A 2D numpy array representing the reference distance map.
+    num_probes (int): The number of probes in the distance maps.
+
+    Returns:
+    np.ndarray: A 2D numpy array containing the variance of the squared Euclidean distances 
+               between each distance map and the reference map.
+    """
+    # Convert dmap_list to a NumPy array
+    dmap_list = jnp.array(dmap_list)
+    
+    # Calculate the squared Euclidean distance between each distance map and the reference map
+    diff_list = jnp.sqrt((dmap_list - dmap_ref) ** 2) 
+    
+    # Calculate the variance along the number of observation/cell dimension
+    var = jnp.var(diff_list, axis=0)
+    
+    return var
+
+
+# Rewrite this in a jax-compatible fashion
+from functools import partial
+@partial(jax.jit, static_argnums=(2,)) 
+def batch_calculate_variances(dmap_list, dmap_ref, num_probes):
+    """
+    Vectorized version that applies calculate_conformational_variance_jax across a batch of distance maps.
+    """
+    return jax.vmap(lambda dmap: calculate_conformational_variance_jax(dmap_list, jnp.reshape(dmap, [num_probes, num_probes])))(dmap_ref)
+
+
+# Define the main loglikelihood function using JAX
+def loglikelihood_jax(dmap_flat, ref_dmap_flat, measurement_error, num_probes):
+    return jnp.sum(_loglikelihood_jax(dmap_flat, ref_dmap_flat, measurement_error, num_probes))
+
+
+# Define the helper function, with JAX-compatible logic
+def _loglikelihood_jax(dmap_flat, ref_dmap_flat, measurement_error, num_probes):
+    # Use lax.cond for control flow based on the condition
+    min_value = jnp.iinfo(jnp.int32).min
+    
+    def handle_invalid_reference(ref_dmap_flat):
+        # Return extremely low probability when ref_dmap_flat contains invalid values
+        return jnp.array([jnp.float32(min_value), jnp.float32(min_value)])
+    
+    def handle_valid_reference(ref_dmap_flat):
+        # Calculate the difference between distance map and reference 
+        subtraction_map_sq = jnp.square(dmap_flat - ref_dmap_flat).reshape(num_probes, num_probes)
+
+        # Only consider the upper triangular part of the distance map
+        # because the diagonal values do not have variance
+        triu_indices = jnp.triu_indices(num_probes, k=1)
+        measurement_error_scaled = 2 * measurement_error[triu_indices]  # both triangles 
+        subtraction_map_sq_scaled = 2 * subtraction_map_sq[triu_indices]  # both triangles
+        
+        # Calculate the normalization factor
+        normalization_factor = -jnp.sum(jnp.log(jnp.sqrt(2 * jnp.pi * measurement_error_scaled**2)))
+        
+        # Calculate the Gaussian term 
+        gaussian_term = -jnp.sum(subtraction_map_sq_scaled / (2 * jnp.square(measurement_error_scaled)))
+        
+        return jnp.array([normalization_factor, gaussian_term])
+
+    # Apply the appropriate logic depending on whether ref_dmap_flat contains negative values
+    return lax.cond(
+        jnp.any(ref_dmap_flat <= -1),
+        handle_invalid_reference,
+        handle_valid_reference,
+        ref_dmap_flat
+    )
+
+    
+def compute_loglikelihood_for_y(y, templates_flatten, measurement_error_esc, num_probes):
+    return jax.vmap(lambda x, z: loglikelihood_jax(y, x, z, num_probes))(templates_flatten, measurement_error_esc)
+
+
+def submit_mcmc_slurm(mcmc_common_dir, slurm_file):
+    # List all the directories in the MCMC common directory
+    # Only return directories that contain data.json
+    dirs = []
+
+    # List all items in the current directory
+    for item in os.listdir(mcmc_common_dir):
+        # Get the full path of the item
+        full_path = os.path.join(mcmc_common_dir, item)
+        
+        # Check if the item is a directory
+        # And if the directory contains data.json
+        # Check if 'data.json' exists in the directory
+        file_path = os.path.join(full_path, 'data.json')
+        if os.path.isfile(file_path):
+            dirs.append(full_path)
+            
+    # Submit a slurm job for each directory
+    for dir in dirs:
+        # Get the name of the directory
+        
+        dir_name = os.path.basename(dir)
+        print(f"Submitting slurm job for {dir_name}")
+        
+        run_mcmc_py = '/mnt/home/tudomlumleart/ceph/01_ChromatinEnsembleRefinement/chromatin-ensemble-refinement/scripts/_run_mcmc.py'
+        
+        # Submit a slurm job
+        cmd = f'sbatch {slurm_file} {run_mcmc_py} {dir}'
+        
+        # Run the command
+        os.system(cmd)
+        
+
 def load_weights(directory, num_metastructures):
     log_weights = []
     lp = []
@@ -855,6 +969,23 @@ def load_weights(directory, num_metastructures):
         lp.append(lp_chain)
     log_weights_d = np.array(log_weights_d)
     return log_weights_d 
+
+
+def load_mcmc_results(mcmc_dir, num_microstates):
+    # Find stan_output folder path and then load the MCMC samples
+    # List all items in the current directory
+    mcmc_result = {}
+    for item in tqdm(os.listdir(mcmc_path)):
+        # Get the full path of the item
+        full_path = os.path.join(mcmc_path, item)
+        
+        # Check if the item is a directory
+        # And if the directory contains stan_output folder
+        # Check if 'stan_output' exists in the directory
+        folder_path = os.path.join(full_path, 'stan_output')
+        if os.path.exists(folder_path) and os.path.isdir(folder_path):
+            # Load the MCMC results
+            mcmc_result[item] = load_weights(folder_path, num_microstates)
 
 
 
