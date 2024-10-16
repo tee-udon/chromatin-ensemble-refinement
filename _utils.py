@@ -971,7 +971,7 @@ def load_weights(directory, num_metastructures):
     return log_weights_d 
 
 
-def load_mcmc_results(mcmc_dir, num_microstates):
+def load_mcmc_results(mcmc_path, num_microstates):
     # Find stan_output folder path and then load the MCMC samples
     # List all items in the current directory
     mcmc_result = {}
@@ -986,6 +986,8 @@ def load_mcmc_results(mcmc_dir, num_microstates):
         if os.path.exists(folder_path) and os.path.isdir(folder_path):
             # Load the MCMC results
             mcmc_result[item] = load_weights(folder_path, num_microstates)
+            
+    return mcmc_result
 
 
 
