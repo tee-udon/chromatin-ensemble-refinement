@@ -990,6 +990,58 @@ def load_mcmc_results(mcmc_path, num_microstates):
     return mcmc_result
 
 
+def calculate_entropy(mcmc_sample):
+    return np.array([scipy.stats.entropy(x) for x in mcmc_sample])
+
+
+def generate_microstates(min_pc1, max_pc1, min_pc2, max_pc2, num_microstates, pca_model):
+    """
+    Generates a grid of points (microstates) based on provided PCA components ranges, 
+    sorts them, and applies inverse transformation using the given PCA model.
+    
+    Parameters:
+    ----------
+    min_pc1 : float
+        Minimum value for the first principal component (PC1).
+    max_pc1 : float
+        Maximum value for the first principal component (PC1).
+    min_pc2 : float
+        Minimum value for the second principal component (PC2).
+    max_pc2 : float
+        Maximum value for the second principal component (PC2).
+    num_microstates : int
+        Number of microstates (grid points) to generate for each component.
+    pca_model : sklearn.decomposition.PCA
+        Pre-trained PCA model that will be used to inverse transform the generated grid points.
+    
+    Returns:
+    -------
+    np.ndarray
+        A NumPy array containing the inverse-transformed microstates.
+    
+    Example:
+    -------
+    microstates = generate_microstates(-5, 5, -5, 5, 75, pca_model)
+    """
+    
+    # Create a grid of points
+    pc1 = np.linspace(min_pc1, max_pc1, num_microstates)
+    pc2 = np.linspace(min_pc2, max_pc2, num_microstates)
+    pc1, pc2 = np.meshgrid(pc1, pc2)
+    pc1 = pc1.flatten()
+    pc2 = pc2.flatten()
+
+    # Create a DataFrame from the grid points
+    grid = pd.DataFrame({'PC1': pc1, 'PC2': pc2})
+
+    # Sort PC2 in descending order while keeping PC1 in ascending order
+    grid_sorted = grid.sort_values(by=['PC1', 'PC2'], ascending=[True, False], ignore_index=True)
+
+    # Apply inverse transformation using the provided PCA model
+    microstates = pca_model.inverse_transform(grid_sorted)
+
+    return microstates
+
 
 
 
