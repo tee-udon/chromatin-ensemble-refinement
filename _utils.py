@@ -83,7 +83,8 @@ def generate_gaussian_chain(num_monomers: int,
     return positions
 
 
-def visualize_polymer(polymer_chain: ArrayLike, save_path: str = '') -> None:
+def visualize_polymer(polymer_chain: ArrayLike, save_path: str = '', 
+                      ax: plt.Axes = None) -> None:
     """Plot a polymer chain in 3D space and optionally save the figure 
     
     Monomers are colored by the distance from one end of the polymer. 
@@ -94,7 +95,8 @@ def visualize_polymer(polymer_chain: ArrayLike, save_path: str = '') -> None:
                     an `num_monomers-by-3` ArrayLike of monomer coordinates 
     save_path : str, optional
                 path to save the figure
-                
+    ax : matplotlib.axes._subplots.Axes3DSubplot
+         the axes to plot the polymer chain on
     """
     # Extract each coordinate of this polymer chain 
     x = polymer_chain[:, 0]
@@ -124,8 +126,9 @@ def visualize_polymer(polymer_chain: ArrayLike, save_path: str = '') -> None:
     z_fine = cs_z(t_fine)
 
     # Create a new matplotlib figure and an axes instance (the 3d part)
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
+    if ax is None:
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
 
     # Plot using scatter
     ax.plot(x_fine, y_fine, z_fine, 'gray', label='Interpolated Path')
@@ -145,10 +148,10 @@ def visualize_polymer(polymer_chain: ArrayLike, save_path: str = '') -> None:
     # cbar = plt.colorbar(sm, ax=ax)
     # cbar.set_label('Monomer number')
     
-    ax.legend()
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.show()
+    # ax.legend()
+    # if save_path:
+    #     plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    # plt.show()
     
     
 def compare_distance_maps(
